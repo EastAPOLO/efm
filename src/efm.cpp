@@ -1,7 +1,6 @@
 #include <filesystem>
 #include <future>
 #include <ncurses.h>
-#include <csignal>
 #include "files.hpp"
 
 constexpr int default_pos = 1;
@@ -25,14 +24,34 @@ static files left_window(WINDOW *left_win, std::filesystem::path &window_path){
     box(left_win, 0, 0);
     wprintw(left_win, window_path.c_str());
 
+    std::vector<std::filesystem::directory_entry> temp_files;
     for(auto& p: std::filesystem::directory_iterator(window_path)){
-        item.position.push_back(y);
-        item.name.push_back(p.path().filename());
-        item.is_dir.push_back(p.is_directory());
-        mvwprintw(left_win, y++, x, p.path().filename().c_str());
-
+        if(p.is_directory()){
+            item.name.push_back(p);
+        } else {
+            temp_files.push_back(p);
+        }
     }
 
+    // Handle empty directory
+    if(temp_files.empty() && item.name.empty()){
+        item.position = {1};
+        item.name = {std::filesystem::directory_entry{""}};
+        curs_set(0);
+        wrefresh(left_win);
+        return item;
+    }
+
+    // Reset cursor position
+    curs_set(1);
+
+    std::move(temp_files.begin(), temp_files.end(), std::back_inserter(item.name));
+
+    for(auto &p : item.name){
+        item.position.push_back(y);
+        mvwprintw(left_win, y++, x, p.path().filename().c_str());
+    }
+    
     wmove(left_win, default_pos, default_pos);
     wrefresh(left_win);
     return item;
@@ -56,6 +75,7 @@ int main(){
             refresh();
             item = left_window(left_win, window_path);
         }
+
         switch(ch){
             case 'j': {
                 if(item.position[selected] < item.name.size()){
@@ -75,27 +95,26 @@ int main(){
                 break;
             }
 
-            case 'g': {
+            case 'g': 
                 selected = 0;
-                move(item.position[selected], item.position[selected]);
+                move(default_pos, default_pos);
                 break;
-            }
-
-            case 'h': {
+  
+            case 'h': 
                 window_path = window_path.parent_path();
                 selected = 0;
                 item = left_window(left_win, window_path);
                 break;
-            }
-
+            
             case 'l': {
-                if(item.is_dir[selected]){
-                    window_path += "/" + item.name[selected];
+                if(item.name[selected].is_directory()){
+                    window_path = item.name[selected].path();
                     selected = 0;
                     item = left_window(left_win, window_path);
                     break;
 
                 }
+                break;
             }                
         }
     }

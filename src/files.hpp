@@ -1,8 +1,8 @@
 #include <vector>
 #include <string>
+#include <filesystem>
 
 struct files {
     std::vector<int> position;
-    std::vector<std::string> name;
-    std::vector<bool> is_dir;
+    std::vector<std::filesystem::directory_entry> name;
 };
