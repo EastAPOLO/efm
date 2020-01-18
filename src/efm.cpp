@@ -1,9 +1,17 @@
 #include <filesystem>
-#include <future>
+#include <vector>
 #include <ncurses.h>
-#include "files.hpp"
+#include "file.hpp"
 
+constexpr char down = 'j';
+constexpr char up = 'k';
+constexpr char left = 'h';
+constexpr char right = 'l';
+constexpr char top = 'g';
+constexpr char bottom = 'G';
 constexpr int default_pos = 1;
+
+int row, col;
 
 static void start_ncurses(){
     initscr();
@@ -12,107 +20,140 @@ static void start_ncurses(){
     refresh();
 }
 
-static files left_window(WINDOW *left_win, std::filesystem::path &window_path){
-    int y{default_pos}, x{default_pos};
-    int row, col;
-    files item;
+static std::vector<file> left_window(WINDOW *left_win, std::filesystem::path &window_path, int cursor_position, int scroll_position){
+    int y{default_pos};
+    file item;
+    std::vector<file> files;
 
     getmaxyx(stdscr, row, col);
-    left_win = newwin(row - 1, col / 2, 0, 0);
+    left_win = newwin(row, col / 2, 0, 0);
 
     wmove(left_win, 0, 0);
     box(left_win, 0, 0);
     wprintw(left_win, window_path.c_str());
 
-    std::vector<std::filesystem::directory_entry> temp_files;
     for(auto& p: std::filesystem::directory_iterator(window_path)){
-        if(p.is_directory()){
-            item.name.push_back(p);
-        } else {
-            temp_files.push_back(p);
-        }
+        item.name = p.path().filename();
+        item.is_dir = p.is_directory();
+        files.push_back(item);
     }
 
     // Handle empty directory
-    if(temp_files.empty() && item.name.empty()){
-        item.position = {1};
-        item.name = {std::filesystem::directory_entry{""}};
+    if(files.empty()){
+        item.name = {std::string{""}};
+        item.is_dir = false;
+        files.push_back(item);
         curs_set(0);
         wrefresh(left_win);
-        return item;
+        return files;
     }
 
     // Reset cursor position
     curs_set(1);
 
-    std::move(temp_files.begin(), temp_files.end(), std::back_inserter(item.name));
+    for(auto &f : files){
+        mvwprintw(left_win, y++, default_pos, f.name.c_str());        
+    }
 
-    for(auto &p : item.name){
-        item.position.push_back(y);
-        mvwprintw(left_win, y++, x, p.path().filename().c_str());
+    wmove(left_win, cursor_position, default_pos); 
+    wrefresh(left_win);
+    return files;
+}
+
+static void resize_window(WINDOW *left_win, std::filesystem::path &window_path, std::vector<file> &files, int cursor_position, int scroll_position){
+    int y{default_pos};
+    
+    getmaxyx(stdscr, row, col);
+    left_win = newwin(row, col / 2, 0, 0);
+
+    wmove(left_win, 0, 0);
+    box(left_win, 0, 0);
+    wprintw(left_win, window_path.c_str());
+
+    for(int i = scroll_position; i < files.size(); ++i){
+        mvwprintw(left_win, y++, default_pos, files[i].name.c_str());        
     }
     
-    wmove(left_win, default_pos, default_pos);
+    wmove(left_win, cursor_position, default_pos);
     wrefresh(left_win);
-    return item;
 }
 
 int main(){
     int ch;
+    int cursor_pos = default_pos;
+    int scroll_pos = 0;
     int selected = 0;
     WINDOW *left_win = nullptr;
-    files item;
+    std::vector<file> files;
     std::filesystem::path window_path = std::filesystem::current_path();
 
     start_ncurses();   
 
-    auto t1 = std::async(std::launch::async, left_window, std::ref(left_win), std::ref(window_path));
-    item = t1.get();
+    files = left_window(left_win, window_path, default_pos, scroll_pos);
 
     while((ch = getch()) != 'q'){
+        // Handle window resizing
         if(ch == KEY_RESIZE){
             endwin();
             refresh();
-            item = left_window(left_win, window_path);
+            resize_window(left_win, window_path, files, cursor_pos, scroll_pos);
         }
 
         switch(ch){
-            case 'j': {
-                if(item.position[selected] < item.name.size()){
+            case down: {
+                // Handle scrolling down
+                if(ch == down && scroll_pos < files.size() - row + 1 && cursor_pos == row - 1){
                     ++selected;
-                    move(item.position[selected], default_pos);
-                    break; 
+                    ++scroll_pos;
+                    resize_window(left_win, window_path, files, cursor_pos, scroll_pos);
+                    refresh();
+                } else if(cursor_pos < files.size() && cursor_pos < row - 1){
+                    ++cursor_pos;
+                    ++selected;
+                    move(cursor_pos, default_pos); 
                 }
                 break;
             }
 
-            case 'k': {
-                if(item.position[selected] > default_pos){
+            case up: {
+                // Handle scrolling up
+                if(ch == up && scroll_pos > 0 && cursor_pos == default_pos){
                     --selected;
-                    move(item.position[selected], default_pos);
-                    break;
-                }
+                    --scroll_pos;
+                    resize_window(left_win, window_path, files, cursor_pos, scroll_pos);
+                    refresh();
+                } else if(cursor_pos > default_pos){
+                    --cursor_pos;
+                    --selected;
+                    move(cursor_pos, default_pos);
+                }                 
                 break;
             }
 
-            case 'g': 
+            case top: 
+                cursor_pos = default_pos;
+                scroll_pos = 0;
                 selected = 0;
-                move(default_pos, default_pos);
+                resize_window(left_win, window_path, files, cursor_pos, scroll_pos);
                 break;
-  
-            case 'h': 
+
+            case left: 
                 window_path = window_path.parent_path();
+                cursor_pos = default_pos;
+                scroll_pos = 0;
                 selected = 0;
-                item = left_window(left_win, window_path);
+                files = left_window(left_win, window_path, cursor_pos, scroll_pos);
                 break;
             
-            case 'l': {
-                if(item.name[selected].is_directory()){
-                    window_path = item.name[selected].path();
+            case right: {
+                // Opening files not supported yet
+                if(files[selected].is_dir){
+                    window_path += '/' + files[selected].name;
+                    cursor_pos = default_pos;
+                    scroll_pos = 0;
                     selected = 0;
-                    item = left_window(left_win, window_path);
+                    files = left_window(left_win, window_path, cursor_pos, scroll_pos);
                     break;
-
                 }
                 break;
             }                
